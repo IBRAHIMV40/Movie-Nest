@@ -1708,51 +1708,180 @@ const checkVideoIdInUrl = () => {
         const video = data.find(item => item.id == videoId);
         if (video) {
             // Open video modal immediately without delay
-            openVideoNav(video.videoUrl, video.title, video);
+            openVideoNav(video.videoUrl, video.title, video, true);
+            
+            // Remove the videoId from the URL to prevent reopening on back navigation
+            const url = new URL(window.location.href);
+            url.searchParams.delete('videoId');
+            history.replaceState({ videoOpen: true }, '', url);
         }
     }
 };
 
-// Network connection warning functions - Updated to match image
-const showNetworkWarning = () => {
-    const networkWarning = document.getElementById('network-warning');
-    networkWarning.classList.remove('hidden');
-    
-    // Hide app content when network warning is shown
-    document.querySelector('header').style.display = 'none';
-    document.getElementById('discover-container').style.display = 'none';
-    document.getElementById('categories-container').style.display = 'none';
-    document.getElementById('grid-container').style.display = 'none';
-    document.querySelector('footer').style.display = 'none';
-};
-
-const hideNetworkWarning = () => {
-    const networkWarning = document.getElementById('network-warning');
-    networkWarning.classList.add('hidden');
-    
-    // Restore app content when network warning is hidden
-    document.querySelector('header').style.display = 'flex';
-    
-    // Restore the appropriate section based on current state
-    if (inGridView) {
-        document.getElementById('grid-container').style.display = 'grid';
-    } else {
-        document.getElementById('discover-container').style.display = 'block';
-        document.getElementById('categories-container').style.display = 'block';
-    }
-    
-    document.querySelector('footer').style.display = 'flex';
-};
-
-// Check network connection status
-const checkNetworkConnection = () => {
-    if (navigator.onLine) {
-        hideNetworkWarning();
-        showNotification('Network connection restored', 'success');
-    } else {
-        // Still offline, keep showing the warning
+// Update openVideoNav to handle shared links
+const openVideoNav = (videoUrl, videoTitle, item, fromSharedLink = false) => {
+    // Check network connection before opening video
+    if (!navigator.onLine) {
         showNetworkWarning();
+        return;
     }
+    
+    // Display the video navigation modal
+    document.getElementById('video-nav').style.display = 'flex';
+    
+    // Check if the iframe exists, if not create it
+    const navBody = document.querySelector('.nav-body');
+    const iframeContainer = navBody.querySelector('div[style*="position: relative"]');
+    let videoPlayer = document.getElementById('video-player');
+    
+    if (!videoPlayer) {
+        // Create a new iframe
+        videoPlayer = document.createElement('iframe');
+        videoPlayer.id = 'video-player';
+        videoPlayer.setAttribute('frameborder', '0');
+        videoPlayer.setAttribute('allowfullscreen', '');
+        videoPlayer.style.width = '100%';
+        videoPlayer.style.height = '100%';
+        iframeContainer.appendChild(videoPlayer);
+    }
+    
+    // Process the video URL based on its source
+    let processedUrl = videoUrl;
+    
+    // Check if it's a YouTube embed URL
+    if (videoUrl.includes('youtube.com/embed/')) {
+        // Add autoplay=1 parameter for YouTube to autoplay with sound
+        const separator = videoUrl.includes('?') ? '&' : '?';
+        processedUrl = videoUrl + separator + 'autoplay=1&mute=0';
+    } 
+    // For Google Drive preview, ensure no autoplay parameters
+    else if (videoUrl.includes('drive.google.com/file/d/')) {
+        // Google Drive preview doesn't autoplay by default, so no changes needed
+        processedUrl = videoUrl;
+    }
+    
+    // Set the processed video URL in the iframe
+    videoPlayer.src = processedUrl;
+    
+    // Track current movie
+    currentMovieInModal = item;
+    
+    // Update save button state
+    updateSaveButton();
+    
+    // Only push state if we're not already in the modal and not from a shared link
+    if (!inVideoModal && !fromSharedLink) {
+        history.pushState({ videoOpen: true }, '');
+    }
+    inVideoModal = true;
+    
+    // Check if this is a series with episodes
+    const episodeFooter = document.getElementById('episode-footer');
+    if (item && item.isSeries && item.seasons) {
+        // Show episode footer
+        episodeFooter.style.display = 'block';
+        
+        // Set current season index (if not set, default to 0)
+        if (typeof item.currentSeason === 'undefined') {
+            item.currentSeason = 0;
+        }
+        
+        // Update episode title to include season
+        document.getElementById('episode-title').textContent = `${item.title} - Season ${item.seasons[item.currentSeason].seasonNumber}`;
+        
+        // Update episode count for the current season
+        document.getElementById('episode-count').textContent = `${item.seasons[item.currentSeason].episodes.length} Episodes`;
+        
+        // Clear existing episodes
+        const episodeScroller = document.getElementById('episode-scroller');
+        episodeScroller.innerHTML = '';
+        
+        // Add Previous Season button if not the first season
+        if (item.currentSeason > 0) {
+            const prevSeasonBtn = document.createElement('div');
+            prevSeasonBtn.className = 'season-nav-btn prev-season';
+            prevSeasonBtn.innerHTML = `
+                <span class="season-nav-text">Prev</span>
+                <span class="season-number">S${item.seasons[item.currentSeason - 1].seasonNumber}</span>
+            `;
+            
+            prevSeasonBtn.onclick = () => {
+                goToSeason(item.currentSeason - 1);
+            };
+            
+            episodeScroller.appendChild(prevSeasonBtn);
+        }
+        
+        // Add episode buttons for the current season
+        item.seasons[item.currentSeason].episodes.forEach((episode, index) => {
+            const episodeBtn = document.createElement('div');
+            episodeBtn.className = 'episode-btn';
+            if (index === 0) episodeBtn.classList.add('active');
+            
+            const epNum = document.createElement('div');
+            epNum.className = 'ep-num';
+            epNum.textContent = `EP`;
+            
+            const epNumber = document.createElement('div');
+            epNumber.textContent = episode.number;
+            
+            episodeBtn.appendChild(epNum);
+            episodeBtn.appendChild(epNumber);
+            
+            // Add click event
+            episodeBtn.onclick = () => {
+                // Set flag to indicate we're navigating episodes
+                isEpisodeNavigation = true;
+                
+                // Remove active class from all buttons
+                document.querySelectorAll('.episode-btn').forEach(btn => {
+                    btn.classList.remove('active');
+                });
+                
+                // Add active class to clicked button
+                episodeBtn.classList.add('active');
+                
+                // Process episode URL if it's a YouTube video
+                let episodeUrl = episode.url;
+                if (episodeUrl.includes('youtube.com/embed/')) {
+                    const separator = episodeUrl.includes('?') ? '&' : '?';
+                    episodeUrl = episodeUrl + separator + 'autoplay=1&mute=0';
+                }
+                
+                // Load episode in iframe
+                videoPlayer.src = episodeUrl;
+                
+                // Reset flag after a short delay
+                setTimeout(() => {
+                    isEpisodeNavigation = false;
+                }, 100);
+            };
+            
+            episodeScroller.appendChild(episodeBtn);
+        });
+        
+        // Add Next Season button if not the last season
+        if (item.currentSeason < item.seasons.length - 1) {
+            const nextSeasonBtn = document.createElement('div');
+            nextSeasonBtn.className = 'season-nav-btn next-season';
+            nextSeasonBtn.innerHTML = `
+                <span class="season-nav-text">Next</span>
+                <span class="season-number">S${item.seasons[item.currentSeason + 1].seasonNumber}</span>
+            `;
+            
+            nextSeasonBtn.onclick = () => {
+                goToSeason(item.currentSeason + 1);
+            };
+            
+            episodeScroller.appendChild(nextSeasonBtn);
+        }
+    } else {
+        // Hide episode footer for non-series content
+        episodeFooter.style.display = 'none';
+    }
+    
+    // Add the video to the history
+    addToHistory(videoTitle);
 };
 
 // Initialize all new features when the page loads
@@ -1783,7 +1912,7 @@ window.addEventListener('load', () => {
     // Update user profile UI
     updateUserProfile();
     
-    // Check for video ID in URL immediately
+    // Check for video ID in URL immediately (without delay)
     checkVideoIdInUrl();
     
     // Check network connection on load
